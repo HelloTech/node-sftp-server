@@ -145,6 +145,10 @@ var SFTPServer = (function(superClass) {
           debug("SFTP Server: on('end')");
           return _this.emit("end");
         });
+          client.on('error', function() {
+          debug("SFTP Server: on('error')");
+          return _this.emit("error");
+        });
         return client.on('ready', function(channel) {
           client._sshstream.debug = debug;
           return client.on('session', function(accept, reject) {
