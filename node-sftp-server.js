@@ -33,12 +33,10 @@ var Responder = (function(superClass) {
     "unsupported": "OP_UNSUPPORTED"
   };
 
-  function Responder(sftpStream1, req1) {
-    var fn, methodname, ref, symbol;
+  function Responder(req1) {
     this.req = req1;
-    this.sftpStream = sftpStream1;
-    ref = this.constructor.Statuses;
-    fn = (function(_this) {
+    var ref = this.constructor.Statuses;
+    var fn = (function(_this) {
       return function(symbol) {
         return _this[methodname] = function() {
           _this.done = true;
@@ -46,8 +44,8 @@ var Responder = (function(superClass) {
         };
       };
     })(this);
-    for (methodname in ref) {
-      symbol = ref[methodname];
+    for (var methodname in ref) {
+      var symbol = ref[methodname];
       fn(symbol);
     }
   }
@@ -64,7 +62,7 @@ var DirectoryEmitter = (function(superClass) {
     this.req = req1 != null ? req1 : null;
     this.stopped = false;
     this.done = false;
-    DirectoryEmitter.__super__.constructor.call(this, sftpStream1, this.req);
+    DirectoryEmitter.__super__.constructor.call(this, this.req);
   }
 
   DirectoryEmitter.prototype.request_directory = function(req) {
@@ -76,14 +74,11 @@ var DirectoryEmitter = (function(superClass) {
     }
   };
 
-  DirectoryEmitter.prototype.file = function(name, attrs) {
-    if (typeof attrs === 'undefined') {
-      attrs = {};
-    }
+  DirectoryEmitter.prototype.file = function(name) {
     this.stopped = this.sftpStream.name(this.req, {
       filename: name.toString(),
       longname: name.toString(),
-      attrs: attrs
+      attrs: {}
     });
     if (!this.stopped && !this.done) {
       return this.emit("dir");
@@ -144,10 +139,6 @@ var SFTPServer = (function(superClass) {
         client.on('end', function() {
           debug("SFTP Server: on('end')");
           return _this.emit("end");
-        });
-          client.on('error', function() {
-          debug("SFTP Server: on('error')");
-          return _this.emit("error");
         });
         return client.on('ready', function(channel) {
           client._sshstream.debug = debug;
@@ -233,12 +224,7 @@ var SFTPFileStream = (function(superClass) {
 var SFTPSession = (function(superClass) {
   extend(SFTPSession, superClass);
 
-  SFTPSession.Events = [
-    "REALPATH", "STAT", "LSTAT", "FSTAT",
-    "OPENDIR", "CLOSE", "REMOVE", "READDIR",
-    "OPEN", "READ", "WRITE", "RENAME",
-    "MKDIR", "RMDIR"
-  ];
+  SFTPSession.Events = ["REALPATH", "STAT", "LSTAT", "OPENDIR", "CLOSE", "REMOVE", "READDIR", "OPEN", "READ", "WRITE", "RENAME"];
 
   function SFTPSession(sftpStream1) {
     var event, fn, i, len, ref;
@@ -312,10 +298,6 @@ var SFTPSession = (function(superClass) {
     return this.do_stat(reqid, path, 'LSTAT');
   };
 
-  SFTPSession.prototype.FSTAT = function(reqid, handle) {
-    return this.do_stat(reqid, this.handles[handle].path, 'FSTAT');
-  };
-
   SFTPSession.prototype.OPENDIR = function(reqid, path) {
     var diremit;
     diremit = new DirectoryEmitter(this.sftpStream, reqid);
@@ -374,11 +356,14 @@ var SFTPSession = (function(superClass) {
       case "w":
         rs = new Readable();
         started = false;
-        rs._read = (function(_this) {
-          return function(bytes) {
-            if (started) {
-              return;
-            }
+        rs.last_request_id = null;
+        var _this = this;
+        rs._read = function(bytes) {
+          //only once the first _read() is invoked, do we
+          //respond with the handle for write-attempt
+          //that will start WRITE's flowing, which will populate
+          //this Readable's buffer getting filled via push()
+          if(!started) {
             handle = _this.fetchhandle();
             _this.handles[handle] = {
               mode: "WRITE",
@@ -387,8 +372,26 @@ var SFTPSession = (function(superClass) {
             };
             _this.sftpStream.handle(reqid, handle);
             return started = true;
-          };
-        })(this);
+          }
+          if(_this.last_request_id != null) {
+            _this.sftpStream.status(_this.last_request_id, ssh2.SFTP_STATUS_CODE.OK);
+            _this.last_request_id = null;
+          }          
+        };
+        rs.status = function (name) {
+          var status=Responder.Statuses[name];
+          if(!status) {
+            throw new Error("Unknown status: "+name);
+          }
+          if(started) {
+            //stream is already started; mark the _next_ write request
+            //to fail
+            rs._next_error=status;
+          } else {
+            //stream wasn't started yet, reject the OPEN
+            _this.sftpStream.status(reqid, ssh2.SFTP_STATUS_CODE[status]);
+          }
+        };
         return this.emit("writefile", pathname, rs);
       default:
         return this.emit("error", new Error("Unknown open flags: " + stringflags));
@@ -433,8 +436,16 @@ var SFTPSession = (function(superClass) {
   };
 
   SFTPSession.prototype.WRITE = function(reqid, handle, offset, data) {
-    this.handles[handle].stream.push(data);
-    return this.sftpStream.status(reqid, ssh2.SFTP_STATUS_CODE.OK);
+    if(this.handles[handle].stream._next_error) {
+      return this.sftpStream.status(reqid, ssh2.SFTP_STATUS_CODE[this.handles[handle].stream._next_error]);
+    }
+    if(this.handles[handle].stream.push(data)) {
+      this.sftpStream.status(reqid, ssh2.SFTP_STATUS_CODE.OK);
+    } else {
+      //hold on to the reqid so that we can respond OK to it
+      //later, once a new _read() has been called on the stream
+      this.handles[handle].stream.last_request_id=reqid;
+    }
   };
 
   SFTPSession.prototype.CLOSE = function(reqid, handle) {
@@ -458,20 +469,12 @@ var SFTPSession = (function(superClass) {
     }
   };
 
-  SFTPSession.prototype.REMOVE = function(reqid, path) {
-    return this.emit("delete", path, new Responder(this.sftpStream, reqid));
+  SFTPSession.prototype.REMOVE = function(reqid, handle) {
+    return this.emit("delete", new Responder(reqid));
   };
 
   SFTPSession.prototype.RENAME = function(reqid, oldPath, newPath) {
-    return this.emit("rename", oldPath, newPath, new Responder(this.sftpStream, reqid));
-  };
-
-  SFTPSession.prototype.MKDIR = function(reqid, path) {
-    return this.emit("mkdir", path, new Responder(this.sftpStream, reqid));
-  };
-
-  SFTPSession.prototype.RMDIR = function(reqid, path) {
-    return this.emit("rmdir", path, new Responder(this.sftpStream, reqid));
+    return this.emit("rename", oldPath, newPath, new Responder(reqid));
   };
 
   return SFTPSession;
