@@ -1,6 +1,6 @@
 "use strict";
 
-var fs = require('fs');
+var fs = require("fs");
 
 var SFTPServer = require("./node-sftp-server");
 
@@ -49,10 +49,9 @@ srv.on("connect", function(auth){
                 console.log('readstream error');
             });
         });
-        session.on("writefile", function(path, writestream){
+        session.on("writefile", function(path, readstream){
             console.log(username, "attempted to write a file");
-            session.emit('error', "You do not have permissions to write files");
-            return 'error';
+            readstream.status('denied');
         });
         session.on("stat", function(path, statkind, statresponder) {
             fs.stat(path, function(err, stats){
@@ -65,6 +64,12 @@ srv.on("connect", function(auth){
                 else {
                     statresponder.is_directory();
                 }
+                statresponder.permissions = 444;
+                statresponder.uid = stats.uid;
+                statresponder.gid = stats.gid;
+                statresponder.size = stats.size;
+                statresponder.atime = stats.atime;
+                statresponder.mtime = stats.mtime;
                 return statresponder.file();
             });
         });
