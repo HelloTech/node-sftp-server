@@ -37,7 +37,7 @@ srv.on("connect", function(auth){
             });
         });
         session.on("realpath", function(path, callback){
-            callback("/Users/" + username + "/")
+            callback("/home/" + username + "/")
         });
         session.on("readfile", function(path, writestream){
             console.log("File: " + path + " requested!");
