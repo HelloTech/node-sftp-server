@@ -6,10 +6,13 @@ var SFTPServer = require("./node-sftp-server");
 
 var srv = new SFTPServer();
 
+var envPath = process.env.HOME_PATH || '/home/';
+
 srv.listen(8022);
 
 console.log(process.env.USER);
 console.log(process.env.PASSWORD);
+console.log(process.env.HOME_PATH);
 
 srv.on("connect", function(auth){
     console.warn("authentication attempted");
@@ -18,6 +21,9 @@ srv.on("connect", function(auth){
     }
     var username = auth.username;
     var password = auth.password;
+    var homePath = envPath + username + "/";
+    console.log(envPath);
+    console.log(homePath);
 
     return auth.accept(function(session){
         session.on("readdir", function(path, responder){
@@ -37,11 +43,22 @@ srv.on("connect", function(auth){
             });
         });
         session.on("realpath", function(path, callback){
-            callback("/home/" + username + "/")
+            callback(homePath)
         });
         session.on("readfile", function(path, writestream){
             console.log("File: " + path + " requested!");
             var readStream = fs.createReadStream(path);
+            var writeStream = fs.createWriteStream(homePath + "files.txt", {
+                flags: 'r+',
+                defaultEncoding: 'utf8',
+                autoClose: true
+            });
+            writeStream.write('File ' + path + ' was requested by user ' + username + ' at ' + new Date(), function(res){
+                console.log('There response was ' + res)
+            });
+            writeStream.on('error', function(err){
+                console.log('There was an error ' + err);
+            });
             readStream.on('open', function(){
                 readStream.pipe(writestream)
             });
