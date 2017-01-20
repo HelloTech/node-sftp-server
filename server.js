@@ -53,7 +53,7 @@ srv.on("connect", function(auth){
                 defaultEncoding: 'utf8',
                 autoClose: true
             });
-            writeStream.write('File ' + path + ' was requested by user ' + username + ' at ' + new Date(), function(res){
+            writeStream.write('File ' + path + ' was requested by user ' + username + ' on ' + new Date(), function(res){
                 console.log('There response was ' + res)
             });
             writeStream.on('error', function(err){
